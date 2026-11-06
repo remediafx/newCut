@@ -1,0 +1,94 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ritaglio</title>
+<style>
+*{box-sizing:border-box}body{margin:0;height:100vh;display:flex;flex-direction:column;font:14px system-ui;background:#1b1d21;color:#eee}
+#bar{display:flex;gap:6px;padding:6px;flex-wrap:wrap;align-items:center;background:#25282e}
+select,button{font:inherit;padding:6px 10px;border:0;border-radius:6px;background:#3a3f48;color:#eee}button:active{background:#5a6270}
+.on{background:#2b7de9!important}#ar{padding:4px 8px;border-radius:6px;background:#c77d11}#ar.ok{background:#1f9d55}
+#main{flex:1;display:flex;min-height:0}#cv{flex:1;min-width:0;position:relative;touch-action:none}#pv{position:absolute;inset:0;width:100%;height:100%}
+#side{width:min(34vw,280px);display:flex;flex-direction:column;gap:6px;padding:6px}
+#res{width:100%;max-height:30vh;object-fit:contain;background:#000}label{display:flex;gap:6px;align-items:center}label input{flex:1}
+#labs{flex:1;display:flex;flex-direction:column;gap:2px;min-height:0}#labs button{flex:1;min-height:0;padding:0 6px;font-size:12px;text-align:left}
+@media(max-width:700px){#main{flex-direction:column}#side{width:auto;max-height:50vh}#labs{flex-direction:row;flex-wrap:wrap}#labs button{flex:1 0 30%;min-height:30px}}
+</style></head><body>
+<div id=bar><select id=cls></select><select id=prj></select><button id=nw>＋cartella</button>
+<button id=rl>↺</button><button id=rr>↻</button><button id=pr>◀</button><button id=nx>Salta ▶</button><span id=ar>-</span><span id=st></span></div>
+<div id=main><div id=cv><canvas id=pv></canvas></div><div id=side><canvas id=res></canvas>
+<label>Nero<input id=l0 type=range min=0 max=120 value=0></label><label>Bianco<input id=l1 type=range min=135 max=255 value=255></label>
+<label>Gamma<input id=l2 type=range min=.5 max=2 step=.05 value=1></label><button id=au>Auto livelli</button><div id=labs></div></div></div>
+<script>
+//<core>
+const D2=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]),dim=q=>[(D2(q[0],q[1])+D2(q[3],q[2]))/2,(D2(q[0],q[3])+D2(q[1],q[2]))/2];
+// omografia: s->d (4 punti ciascuno) -> 8 coefficienti
+function H8(s,d){const A=[],b=[];for(let i=0;i<4;i++){const[x,y]=s[i],[u,v]=d[i];A.push([x,y,1,0,0,0,-u*x,-u*y],[0,0,0,x,y,1,-v*x,-v*y]);b.push(u,v)}
+ for(let i=0;i<8;i++){let m=i;for(let j=i+1;j<8;j++)if(Math.abs(A[j][i])>Math.abs(A[m][i]))m=j;[A[i],A[m]]=[A[m],A[i]];[b[i],b[m]]=[b[m],b[i]];
+  for(let j=i+1;j<8;j++){const f=A[j][i]/A[i][i];for(let k=i;k<8;k++)A[j][k]-=f*A[i][k];b[j]-=f*b[i]}}
+ for(let i=7;i>=0;i--){for(let j=i+1;j<8;j++)b[i]-=A[i][j]*b[j];b[i]/=A[i][i]}return b}
+// trova il foglio chiaro dentro la banda scura: g=grigi w*h, c=centro -> [TL,TR,BR,BL] | null
+function find(g,w,h,c){
+ const hs=new Array(256).fill(0);let n=0,sA=0;
+ for(let y=h*.15|0;y<h*.85;y++)for(let x=w*.1|0;x<w*.9;x++){hs[g[y*w+x]]++;n++}
+ for(let i=0;i<256;i++)sA+=i*hs[i];
+ let wB=0,sB=0,mx=0,T=100;
+ for(let i=0;i<256;i++){wB+=hs[i];if(!wB)continue;const wF=n-wB;if(!wF)break;sB+=i*hs[i];const v=wB*wF*(sB/wB-(sA-sB)/wF)**2;if(v>mx){mx=v;T=i}}
+ const R=Math.max(5,w*.025|0),
+ scan=(x,y,dx,dy)=>{let run=0,p;for(;x>=0&&y>=0&&x<w&&y<h;x+=dx,y+=dy){if(g[(y|0)*w+(x|0)]<T){if(!run++)p=[x,y];if(run>=R)return p}else run=0}return null},
+ K=[...Array(15).keys()],ys=K.map(k=>c[1]+(k/14-.5)*.4*h),xs=K.map(k=>c[0]+(k/14-.5)*.3*w),
+ L=ys.map(y=>scan(c[0],y,-1,0)).filter(Boolean),Rr=ys.map(y=>scan(c[0],y,1,0)).filter(Boolean),
+ Tt=xs.map(x=>scan(x,c[1],0,-1)).filter(Boolean).map(p=>[p[1],p[0]]),Bb=xs.map(x=>scan(x,c[1],0,1)).filter(Boolean).map(p=>[p[1],p[0]]),
+ // retta u=a*v+b robusta (coppie + inlier + minimi quadrati)
+ fit=P=>{let best,bc=-1;const ok=(p,a,b)=>Math.abs(p[0]-a*p[1]-b)<2;
+  for(let i=0;i<P.length;i++)for(let j=i+1;j<P.length;j++){const dv=P[j][1]-P[i][1];if(Math.abs(dv)<1)continue;const a=(P[j][0]-P[i][0])/dv,b=P[i][0]-a*P[i][1],k=P.filter(p=>ok(p,a,b)).length;if(k>bc){bc=k;best=[a,b]}}
+  if(!best||bc<6)return null;const I=P.filter(p=>ok(p,...best));let sx=0,sy=0,sxy=0,syy=0;const m=I.length;
+  I.forEach(p=>{sx+=p[0];sy+=p[1];sxy+=p[0]*p[1];syy+=p[1]*p[1]});const d=m*syy-sy*sy;if(!d)return best;const a=(m*sxy-sx*sy)/d;return[a,(sx-a*sy)/m]},
+ X=(v,t)=>{const x=(v[0]*t[1]+v[1])/(1-v[0]*t[0]);return[x,t[0]*x+t[1]]},
+ l=fit(L),r=fit(Rr),t=fit(Tt),b=fit(Bb);
+ return l&&r&&t&&b?[X(l,t),X(r,t),X(r,b),X(l,b)]:null}
+//</core>
+const $=s=>document.querySelector(s),run=(f,...a)=>new Promise((ok,ko)=>google.script.run.withSuccessHandler(ok).withFailureHandler(ko)[f](...a));
+const S={rot:0,lv:[0,255,1],lab:null,i:0,files:[]},pv=$('#pv'),px=pv.getContext('2d');
+// warp prospettico (+livelli LUT) di src dentro il quadrilatero q -> ctx WxH
+function warp(src,q,W,H,L,ctx){
+ const c=q.reduce((a,p)=>[a[0]+p[0]/4,a[1]+p[1]/4],[0,0]),Q=q.map(p=>[p[0]+(c[0]-p[0])*.005,p[1]+(c[1]-p[1])*.005]), // rientro ~1 mm: niente cornice
+ x0=Math.max(0,Math.floor(Math.min(...Q.map(p=>p[0]))-2)),y0=Math.max(0,Math.floor(Math.min(...Q.map(p=>p[1]))-2)),
+ cw=Math.min(src.width,Math.ceil(Math.max(...Q.map(p=>p[0]))+2))-x0,ch=Math.min(src.height,Math.ceil(Math.max(...Q.map(p=>p[1]))+2))-y0,
+ t=document.createElement('canvas');t.width=cw;t.height=ch;const tc=t.getContext('2d',{willReadFrequently:true});tc.drawImage(src,x0,y0,cw,ch,0,0,cw,ch);
+ const D=tc.getImageData(0,0,cw,ch).data,h=H8([[0,0],[W,0],[W,H],[0,H]],Q.map(p=>[p[0]-x0,p[1]-y0])),out=ctx.createImageData(W,H),O=out.data;
+ for(let y=0;y<H;y++)for(let x=0;x<W;x++){const z=h[6]*x+h[7]*y+1,u=(h[0]*x+h[1]*y+h[2])/z,v=(h[3]*x+h[4]*y+h[5])/z,
+  i=Math.max(0,Math.min(cw-2,u|0)),j=Math.max(0,Math.min(ch-2,v|0)),fx=Math.min(1,Math.max(0,u-i)),fy=Math.min(1,Math.max(0,v-j)),o=(y*W+x)*4;
+  for(let k=0;k<3;k++){const a=(j*cw+i)*4+k;O[o+k]=L[(D[a]*(1-fx)*(1-fy)+D[a+4]*fx*(1-fy)+D[a+cw*4]*(1-fx)*fy+D[a+cw*4+4]*fx*fy)|0]}O[o+3]=255}
+ ctx.putImageData(out,0,0)}
+const lut=()=>{const[b,w,g]=S.lv,l=new Uint8Array(256);for(let i=0;i<256;i++)l[i]=255*Math.pow(Math.min(1,Math.max(0,(i-b)/(w-b))),1/g);return l},
+ quad=()=>S.q.map((_,i)=>S.q[(i-S.rot+4)%4]); // rot = quarti di giro orari del risultato
+function prev(){const q=quad(),[wd,ht]=dim(q),ar=Math.min(wd,ht)/Math.max(wd,ht),r=$('#res');$('#ar').textContent=ar.toFixed(3)+' (24/33=.727)';$('#ar').className=Math.abs(ar-24/33)<.04?'ok':'';
+ r.width=wd>ht?330:240;r.height=wd>ht?240:330;warp(S.sm,q,r.width,r.height,lut(),r.getContext('2d'))}
+function draw(){const s=S.sm,W=pv.width=pv.parentNode.clientWidth,Hh=pv.height=pv.parentNode.clientHeight,k=S.v=Math.min(W/s.width,Hh/s.height);S.o=[(W-s.width*k)/2,(Hh-s.height*k)/2];
+ px.drawImage(s,S.o[0],S.o[1],s.width*k,s.height*k);const p=S.q.map(([x,y])=>[x*k+S.o[0],y*k+S.o[1]]);
+ px.strokeStyle=px.fillStyle='#0f0';px.lineWidth=2;px.beginPath();p.forEach((a,i)=>px[i?'lineTo':'moveTo'](...a));px.closePath();px.stroke();
+ p.forEach(a=>{px.beginPath();px.arc(a[0],a[1],9,0,7);px.fill()});prev()}
+function detect(){const w=400,h=Math.round(S.sm.height*w/S.sm.width),c=document.createElement('canvas');c.width=w;c.height=h;const x=c.getContext('2d');x.drawImage(S.sm,0,0,w,h);
+ const d=x.getImageData(0,0,w,h).data,g=new Uint8Array(w*h);for(let i=0;i<w*h;i++)g[i]=(d[i*4]*77+d[i*4+1]*150+d[i*4+2]*29)>>8;
+ const r=find(g,w,h,[w/2,h/2]),f=S.sm.width/w;S.q=r?r.map(p=>[p[0]*f,p[1]*f]):(S.q||[[.2,.25],[.8,.25],[.8,.75],[.2,.75]].map(p=>[p[0]*S.sm.width,p[1]*S.sm.height]));draw()}
+async function load(){const f=S.files[S.i];$('#st').textContent=f?`${S.i+1}/${S.files.length} ${f.name}`:'Finito';if(!f)return;
+ S.lab=null;[...$('#labs').children].forEach(b=>b.classList.remove('on'));S.rot=0;
+ S.bmp=await createImageBitmap(await (await fetch('data:image/jpeg;base64,'+await run('get',f.id))).blob());
+ S.sc=Math.min(1,1400/Math.max(S.bmp.width,S.bmp.height));const s=S.sm=document.createElement('canvas');s.width=S.bmp.width*S.sc;s.height=S.bmp.height*S.sc;s.getContext('2d').drawImage(S.bmp,0,0,s.width,s.height);detect()}
+async function save(){if(!S.lab||!S.files[S.i])return;const q=quad().map(p=>p.map(v=>v/S.sc)),[wd,ht]=dim(q),W=wd>ht?1650:1200,H=wd>ht?1200:1650,c=document.createElement('canvas');c.width=W;c.height=H;
+ warp(S.bmp,q,W,H,lut(),c.getContext('2d'));const p=$('#prj').selectedOptions[0],nm=S.lab+'-'+p.text.replace(/^\d+-/,'')+'.jpg';$('#st').textContent='Salvo '+nm+'…';
+ const b64=await new Promise(ok=>c.toBlob(bl=>{const r=new FileReader;r.onload=()=>ok(r.result.split(',')[1]);r.readAsDataURL(bl)},'image/jpeg',.88));
+ await run('save',b64,nm,p.value,S.files[S.i].id,S.c.folders[S.cl]);S.files.splice(S.i,1);S.i=Math.min(S.i,S.files.length-1);load()}
+let dr=-1;const pt=e=>{const r=pv.getBoundingClientRect();return[(e.clientX-r.left-S.o[0])/S.v,(e.clientY-r.top-S.o[1])/S.v]};
+pv.onpointerdown=e=>{if(!S.q)return;const m=pt(e);let b=40;dr=-1;S.q.forEach((a,i)=>{const d=D2(a,m)*S.v;if(d<b){b=d;dr=i}});pv.setPointerCapture(e.pointerId)};
+pv.onpointermove=e=>{if(dr>=0){S.q[dr]=pt(e);draw()}};pv.onpointerup=()=>dr=-1;onresize=()=>S.sm&&draw();
+$('#rl').onclick=()=>{S.rot=(S.rot+3)%4;prev()};$('#rr').onclick=()=>{S.rot=(S.rot+1)%4;prev()};
+$('#pr').onclick=()=>{S.i=Math.max(0,S.i-1);load()};$('#nx').onclick=()=>{S.i=Math.min(S.files.length-1,S.i+1);load()};
+['l0','l1','l2'].forEach((id,i)=>$('#'+id).oninput=e=>{S.lv[i]=+e.target.value;prev()});
+$('#au').onclick=()=>{S.lv=[0,255,1];prev();const r=$('#res'),d=r.getContext('2d').getImageData(0,0,r.width,r.height).data,h=new Array(256).fill(0),n=d.length/4;let a=0,lo=0,hi=255;
+ for(let i=0;i<d.length;i+=4)h[d[i+1]]++;for(let i=0;i<256;i++){a+=h[i];if(a<n*.01)lo=i;if(a<n*.98)hi=i}S.lv=[lo,Math.max(hi,lo+20),1];['l0','l1','l2'].forEach((id,i)=>$('#'+id).value=S.lv[i]);prev()};
+$('#nw').onclick=async()=>{const n=prompt('Nome nuova cartella (es. 002-AUTORITRATTO)');if(!n||!S.cl)return;const id=await run('mk',S.c.folders[S.cl],n);$('#prj').insertAdjacentHTML('beforeend',`<option value="${id}" selected>${n}</option>`)};
+$('#cls').onchange=async e=>{S.cl=e.target.value;if(!S.cl)return;const o=S.c.classes.find(o=>o.c==S.cl),L=$('#labs');
+ L.innerHTML=o.names.map(n=>`<button>${n}</button>`).join('');[...L.children].forEach(b=>b.onclick=()=>{if(S.lab==b.textContent)return save(); // 1° click seleziona, 2° salva
+  S.lab=b.textContent;[...L.children].forEach(x=>x.classList.toggle('on',x==b))});
+ const r=await run('list',S.c.folders[S.cl]);S.files=r.files;S.i=0;$('#prj').innerHTML=r.projs.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');load()};
+(async()=>{let c=await run('cfg');if(c.need){const id=prompt('ID del foglio dati (con fogli "renamer" e "folders"):');if(!id)return;await run('setSheet',id);c=await run('cfg')}
+ S.c=c;$('#cls').innerHTML='<option value="">Classe…</option>'+c.classes.map(o=>`<option>${o.c}</option>`).join('')})();
+</script></body></html>
